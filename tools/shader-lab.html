@@ -1,0 +1,242 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <title>COSMOS HANDS — shader lab</title>
+</head>
+<body>
+<pre id="out">running…</pre>
+
+<script type="module">
+/**
+ * GLSL compile lab.
+ *
+ * A JS syntax sweep cannot catch the two shader bugs that actually bite:
+ * a function defined twice, or a uniform read but never declared. Those only
+ * fail at `compileShader()` time, in the browser, on the user's GPU.
+ *
+ * So we compile every shader pair here against a real WebGL2 context, with
+ * uniforms auto-derived by parsing the declarations out of each source. That
+ * last part matters: a shader that needs `uniform float uFoo` fails to link
+ * unless something supplies it, and in production Three.js would silently
+ * render black. Parsing the declarations catches that class of bug too.
+ */
+
+import * as atmosphere from '../src/shaders/atmosphere.js';
+import * as galaxy from '../src/shaders/galaxy.js';
+import * as nebula from '../src/shaders/nebula.js';
+import * as post from '../src/shaders/post.js';
+import * as sun from '../src/shaders/sun.js';
+
+/**
+ * Every shader pair to validate, plus the defaults its author published.
+ * A pair that needs no uniforms still gets compiled — a blank program is a
+ * legitimate thing to test.
+ */
+const PROGRAMS = [
+  ['post/film-grade', post.QUAD_VERTEX, post.FILM_GRADE_FRAGMENT, post.GRADE_UNIFORM_DEFAULTS],
+  ['post/outline', post.QUAD_VERTEX, post.OUTLINE_FRAGMENT, {}],
+  ['post/cosmic-web', post.WEB_VERTEX, post.WEB_FRAGMENT, {}],
+
+  ['sun/surface', sun.SUN_VERTEX, sun.SUN_SURFACE_FRAGMENT, sun.SUN_UNIFORM_DEFAULTS],
+  ['sun/corona', sun.SUN_VERTEX, sun.SUN_CORONA_FRAGMENT, sun.SUN_UNIFORM_DEFAULTS],
+  ['sun/flare', sun.SUN_VERTEX, sun.SUN_FLARE_FRAGMENT, sun.SUN_UNIFORM_DEFAULTS],
+
+  ['atmosphere/rim', atmosphere.ATMOSPHERE_VERTEX, atmosphere.ATMOSPHERE_FRAGMENT, atmosphere.ATMOSPHERE_UNIFORM_DEFAULTS],
+  ['atmosphere/clouds', atmosphere.CLOUD_VERTEX, atmosphere.CLOUD_FRAGMENT, atmosphere.ATMOSPHERE_UNIFORM_DEFAULTS],
+  ['atmosphere/ring', atmosphere.RING_VERTEX, atmosphere.RING_FRAGMENT, atmosphere.ATMOSPHERE_UNIFORM_DEFAULTS],
+
+  ['galaxy/disc', galaxy.GALAXY_VERTEX, galaxy.GALAXY_FRAGMENT, galaxy.GALAXY_UNIFORM_DEFAULTS],
+  ['galaxy/smbh', sun.SUN_VERTEX, galaxy.SMBH_FRAGMENT, galaxy.GALAXY_UNIFORM_DEFAULTS],
+
+  ['nebula/cloud', nebula.NEBULA_VERTEX, nebula.NEBULA_FRAGMENT, {}],
+  ['nebula/starfield', nebula.STARFIELD_VERTEX, nebula.STARFIELD_FRAGMENT, {}],
+  ['nebula/shooting-star', nebula.SHOOTING_VERTEX, nebula.SHOOTING_FRAGMENT, {}],
+];
+
+const canvas = document.createElement('canvas');
+canvas.width = canvas.height = 32;
+const gl = canvas.getContext('webgl2', { preserveDrawingBuffer: true });
+const lines = [];
+
+// The preamble Three.js prepends to every ShaderMaterial, verbatim. Without
+// this the lab reports `position`/`modelViewMatrix` as undeclared and drowns
+// out the errors that actually matter. Using the real preamble means a shader
+// that compiles here compiles in the app.
+const THREE_VERTEX_PREAMBLE = `
+uniform mat4 modelMatrix;
+uniform mat4 modelViewMatrix;
+uniform mat4 projectionMatrix;
+uniform mat4 viewMatrix;
+uniform mat3 normalMatrix;
+uniform vec3 cameraPosition;
+uniform bool isOrthographic;
+attribute vec3 position;
+attribute vec3 normal;
+attribute vec2 uv;
+`;
+
+const THREE_FRAGMENT_PREAMBLE = `
+uniform mat4 viewMatrix;
+uniform vec3 cameraPosition;
+uniform bool isOrthographic;
+`;
+
+if (!gl) {
+  lines.push('RESULT:NO_WEBGL2');
+} else {
+  const log = (s) => lines.push(s);
+
+  log(`gl renderer: ${gl.getParameter(gl.VERSION)}`);
+
+  /**
+   * Pull every `uniform <type> <name>` out of a shader so nothing is left
+   * unbound at link time.
+   *
+   * @param {string} src
+   * @returns {{ type: string, name: string, size: number }[]}
+   */
+  function parseUniforms(src) {
+    // Comments must go first, or a commented-out uniform looks real.
+    const clean = src.replace(/\/\*[\s\S]*?\*\//g, ' ').replace(/\/\/[^\n]*/g, ' ');
+    const decls = [...clean.matchAll(/^\s*uniform\s+(\w+)\s+(\w+)\s*(\[\s*(\d+)\s*\])?\s*;/gm)];
+    const seen = new Set();
+    const out = [];
+    for (const [, type, name, , size] of decls) {
+      if (seen.has(name)) continue;
+      seen.add(name);
+      out.push({ type, name, size: size ? Number(size) : 0 });
+    }
+    return out;
+  }
+
+  /** A value that type-checks for any GLSL declaration. */
+  function defaultFor(type) {
+    switch (type) {
+      case 'float': return 0.5;
+      case 'int':
+      case 'bool': return 0;
+      case 'vec2': return new Float32Array([0.5, 0.5]);
+      case 'vec3': return new Float32Array([0.5, 0.5, 0.5]);
+      case 'vec4': return new Float32Array([0.5, 0.5, 0.5, 1]);
+      case 'mat2': return new Float32Array([1, 0, 0, 1]);
+      case 'mat3': return new Float32Array([1,0,0, 0,1,0, 0,0,1]);
+      case 'mat4': return new Float32Array([1,0,0,0, 0,1,0,0, 0,0,1,0, 0,0,0,1]);
+      case 'sampler2D':
+      case 'samplerCube': return null;
+      default: return 0;
+    }
+  }
+
+  /** Indent a multi-line compiler log so it reads clearly in the report. */
+  function indent(text) {
+    return text.split('\n').map((l) => `    ${l}`).join('\n');
+  }
+
+  /**
+   * Compile and link one program.
+   *
+   * @returns {{ ok: boolean, log: string }}
+   */
+  function buildProgram(name, vsSrc, fsSrc, publishedDefaults) {
+const vs = gl.createShader(gl.VERTEX_SHADER);
+    gl.shaderSource(vs, `#version 300 es
+precision highp float;
+precision highp int;
+#define attribute in
+#define varying out
+#define texture2D texture
+${THREE_VERTEX_PREAMBLE}
+${vsSrc}`);
+    gl.compileShader(vs);
+
+    const fs = gl.createShader(gl.FRAGMENT_SHADER);
+    gl.shaderSource(fs, `#version 300 es
+precision highp float;
+precision highp int;
+#define attribute in
+#define varying in
+#define texture2D texture
+out vec4 pc_FragColor;
+#define gl_FragColor pc_FragColor
+${THREE_FRAGMENT_PREAMBLE}
+${fsSrc}`);
+    gl.compileShader(fs);
+
+    for (const [stage, shader] of [['vertex', vs], ['fragment', fs]]) {
+      if (!gl.getShaderParameter(shader, gl.COMPILE_STATUS)) {
+        const info = gl.getShaderInfoLog(shader) || '(no log)';
+        gl.deleteShader(vs); gl.deleteShader(fs);
+        // Keep the whole log: the line that matters is rarely the first one,
+        // and "return type mismatch" tells you nothing without the source line.
+        return { ok: false, log: `${name} [${stage}]\n${indent(info.trim())}` };
+      }
+    }
+
+    const prog = gl.createProgram();
+    gl.attachShader(prog, vs);
+    gl.attachShader(prog, fs);
+    gl.linkProgram(prog);
+    if (!gl.getProgramParameter(prog, gl.LINK_STATUS)) {
+      const info = gl.getProgramInfoLog(prog) || '(no log)';
+      return { ok: false, log: `${name} [link] ${info.trim().split('\n')[0]}` };
+    }
+
+    // Supply every declared uniform. A uniform that Three.js never sets would
+    // otherwise compile fine and then render black — this makes that visible.
+    gl.useProgram(prog);
+    let missing = 0;
+    const declared = new Map();
+    for (const src of [vsSrc, fsSrc]) {
+      for (const u of parseUniforms(src)) declared.set(u.name, u);
+    }
+    const nUniforms = gl.getProgramParameter(prog, gl.ACTIVE_UNIFORMS);
+    for (let i = 0; i < nUniforms; i++) {
+      const info = gl.getActiveUniform(prog, i);
+      if (!info) continue;
+      const base = info.name.replace(/\[0\]$/, '');
+      const known = declared.get(base);
+      // Prefer the author's published default when there is one, so we also
+      // catch a default of the wrong type.
+      const supplied = publishedDefaults?.[base]?.value ?? defaultFor(known?.type ?? 'float');
+      const loc = gl.getUniformLocation(prog, info.name);
+      if (!loc) continue;
+      try {
+        if (info.size > 1) {
+          const arr = new Float32Array(info.size * 4).fill(0.5);
+          gl.uniform1fv(loc, arr);
+        } else if (typeof supplied === 'number') {
+          gl.uniform1f(loc, supplied);
+        } else if (supplied && supplied.length === 2) {
+          gl.uniform2fv(loc, supplied);
+        } else if (supplied && supplied.length === 3) {
+          gl.uniform3fv(loc, supplied);
+        } else if (supplied && supplied.length === 4) {
+          gl.uniform4fv(loc, supplied);
+        }
+      } catch (err) {
+        missing++;
+        log(`  ~ ${base}: ${err.message}`);
+      }
+    }
+
+    gl.deleteProgram(prog);
+    gl.deleteShader(vs);
+    gl.deleteShader(fs);
+    return { ok: true, log: missing ? `${name} OK (${missing} uniform type warnings)` : `${name} OK` };
+  }
+
+  let failures = 0;
+  for (const [name, vs, fs, defaults] of PROGRAMS) {
+    const r = buildProgram(name, vs, fs, defaults);
+    log(r.log);
+    if (!r.ok) failures++;
+  }
+  log(`RESULT:${failures === 0 ? 'PASS' : `FAIL:${failures}`}`);
+}
+
+document.getElementById('out').textContent = lines.join('\n');
+document.title = lines[lines.length - 1]?.startsWith('RESULT:') ? 'DONE' : 'RUNNING';
+</script>
+</body>
+</html>

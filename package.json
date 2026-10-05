@@ -1,0 +1,49 @@
+{
+  "name": "cosmos-hands",
+  "private": true,
+  "version": "1.0.0",
+  "description": "COSMOS HANDS — a gesture-controlled 3D universe in the browser. Solar system, Milky Way, deep universe and 88 constellations, driven by webcam hand tracking. Nothing leaves your device.",
+  "type": "module",
+  "license": "MIT",
+  "engines": {
+    "node": ">=18.18"
+  },
+  "scripts": {
+    "dev": "vite",
+    "build": "node scripts/build_constellations.mjs && vite build",
+    "preview": "vite preview --port 4173",
+    "assets": "bash scripts/fetch_textures.sh",
+    "data": "node scripts/build_constellations.mjs",
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "check:shaders": "node tools/validate-shaders.mjs",
+    "check": "npm run check:shaders && npm run test && vite build",
+    "deploy": "npm run build"
+  },
+  "dependencies": {
+    "@mediapipe/tasks-vision": "1.0.1",
+    "gsap": "^3.13.0",
+    "three": "0.186.1"
+  },
+  "devDependencies": {
+    "jsdom": "^29.1.1",
+    "vite": "^7.1.5",
+    "vitest": "^3.2.4"
+  },
+  "keywords": [
+    "threejs",
+    "webgl",
+    "mediapipe",
+    "hand-tracking",
+    "gesture-recognition",
+    "astronomy",
+    "solar-system",
+    "constellations",
+    "creative-coding"
+  ],
+  "browserslist": [
+    "last 2 Chrome versions",
+    "last 2 Safari versions",
+    "last 2 Firefox versions"
+  ]
+}
