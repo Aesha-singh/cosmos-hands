@@ -1,0 +1,249 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+  <meta name="theme-color" content="#050816" />
+  <meta name="color-scheme" content="dark" />
+  <title>COSMOS HANDS — a universe you steer with your hands</title>
+  <meta name="description" content="Control an astronomically accurate solar system, the Milky Way and the cosmic web with nothing but your bare hands. Webcam hand tracking runs entirely in your browser — no video ever leaves your device." />
+
+  <meta property="og:type" content="website" />
+  <meta property="og:title" content="COSMOS HANDS" />
+  <meta property="og:description" content="Gesture-controlled 3D universe in the browser. Solar system · Milky Way · cosmic web · 88 constellations." />
+  <meta name="twitter:card" content="summary_large_image" />
+
+  <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 64 64'%3E%3Ccircle cx='32' cy='32' r='9' fill='%23D4AF37'/%3E%3Cellipse cx='32' cy='32' rx='27' ry='11' fill='none' stroke='%236FE3FF' stroke-width='2' transform='rotate(-24 32 32)'/%3E%3C/svg%3E" />
+
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Cormorant+Garamond:wght@300;400;500;600&family=IBM+Plex+Mono:wght@300;400;500&display=swap" />
+  <script type="module" crossorigin src="./assets/index-BAkpOH3N.js"></script>
+  <link rel="modulepreload" crossorigin href="./assets/three-CzKiNh54.js">
+  <link rel="modulepreload" crossorigin href="./assets/gsap-xgxdCp6f.js">
+  <link rel="modulepreload" crossorigin href="./assets/mediapipe-DmhUQS23.js">
+</head>
+<body>
+  <!-- ============================ WEBGL CANVAS ============================ -->
+  <canvas id="stage" aria-label="Three-dimensional cosmos viewport"></canvas>
+
+  <!-- Screen-space hand skeleton, drawn above the WebGL canvas. -->
+  <canvas id="hand-overlay" aria-hidden="true"></canvas>
+
+  <!-- ============================ CINEMATIC INTRO ========================= -->
+  <div id="intro" class="intro" role="dialog" aria-label="Introduction">
+    <div class="intro__vignette"></div>
+    <div class="intro__title">
+      <h1 class="intro__wordmark"><span>COSMOS</span><em>HANDS</em></h1>
+      <p class="intro__tagline">A universe you steer with your hands</p>
+      <div class="intro__rule" aria-hidden="true"><i></i></div>
+      <p class="intro__meta">
+        <span>MEDIAPIPE HANDS</span><span>THREE.JS</span><span>GLSL</span><span>100% ON-DEVICE</span>
+      </p>
+    </div>
+    <div class="intro__foot">
+      <button id="btn-begin-camera" class="btn btn--gold" type="button">
+        <span class="btn__glow"></span>ENTER WITH HAND TRACKING
+      </button>
+      <button id="btn-begin-mouse" class="btn btn--ghost" type="button">Explore with mouse &amp; touch</button>
+      <p class="intro__privacy">
+        <svg viewBox="0 0 24 24" width="13" height="13" aria-hidden="true"><path d="M12 2 4 5v6c0 5 3.4 9.4 8 11 4.6-1.6 8-6 8-11V5l-8-3Z" fill="none" stroke="currentColor" stroke-width="1.6"/><path d="m9 12 2 2 4-4" fill="none" stroke="currentColor" stroke-width="1.6"/></svg>
+        Frames are processed on your GPU. Nothing is uploaded, recorded or sent anywhere.
+      </p>
+    </div>
+  </div>
+
+  <!-- ============================ PERMISSION GATE ========================= -->
+  <div id="permission" class="gate" hidden>
+    <div class="gate__card glass">
+      <h2 class="gate__title">Camera access needed</h2>
+      <p id="permission-reason" class="gate__body">
+        COSMOS HANDS reads 21 landmarks per hand from your webcam, entirely on-device,
+        to translate gestures into camera moves.
+      </p>
+      <div class="gate__actions">
+        <button id="btn-grant" class="btn btn--gold" type="button">ALLOW CAMERA</button>
+        <button id="btn-skip-camera" class="btn btn--ghost" type="button">Continue without it</button>
+      </div>
+      <p class="gate__hint">Your browser will ask you next. Deny and everything still works with mouse &amp; touch.</p>
+    </div>
+  </div>
+
+  <!-- ============================ ERROR STATES ============================ -->
+  <div id="fatal" class="gate" hidden>
+    <div class="gate__card glass gate__card--error">
+      <h2 class="gate__title" id="fatal-title">Something went wrong</h2>
+      <p class="gate__body" id="fatal-body"></p>
+      <pre class="gate__trace" id="fatal-trace" hidden></pre>
+      <div class="gate__actions">
+        <button id="btn-fatal-reload" class="btn btn--gold" type="button">RELOAD</button>
+        <button id="btn-fatal-report" class="btn btn--ghost" type="button">Copy details</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- ============================== LOW FPS =============================== -->
+  <div id="perf-warning" class="perf" hidden>
+    <span class="perf__dot"></span>
+    <span id="perf-warning-text">Reducing quality to hold frame rate</span>
+  </div>
+
+  <!-- =============================== HUD =================================== -->
+  <div id="hud" class="hud" hidden>
+
+    <!-- top left: scene + focus -->
+    <section class="hud__panel hud__panel--tl glass" id="panel-focus">
+      <div class="hud__eyebrow">SCENE <span id="scene-index">01</span> / 04</div>
+      <h1 class="hud__focus" id="focus-name">THE SUN</h1>
+      <p class="hud__sub" id="focus-sub">G2V main-sequence star</p>
+      <dl class="hud__readout">
+        <div><dt>DISTANCE</dt><dd id="ro-distance">—</dd></div>
+        <div><dt>SCALE</dt><dd id="ro-scale">—</dd></div>
+      </dl>
+    </section>
+
+    <!-- top right: hand status + webcam -->
+    <section class="hud__panel hud__panel--tr glass" id="panel-tracking">
+      <div class="hud__eyebrow">HAND TRACKING</div>
+      <div class="track">
+        <span class="track__dot" id="track-dot"></span>
+        <span class="track__label" id="track-label">searching…</span>
+      </div>
+      <div class="cam">
+        <video id="webcam" playsinline muted autoplay></video>
+        <canvas id="webcam-overlay"></canvas>
+        <div class="cam__scan" aria-hidden="true"></div>
+      </div>
+      <div class="hud__gesture">
+        <span class="hud__gesture-emoji" id="gesture-emoji">🖐</span>
+        <span class="hud__gesture-name" id="gesture-name">idle</span>
+      </div>
+      <div class="hud__toggles">
+        <button class="chip" data-toggle="cam" type="button">CAM</button>
+        <button class="chip" data-toggle="mute" type="button">SND</button>
+        <button class="chip" data-toggle="labels" type="button">LBL</button>
+        <button class="chip" data-toggle="orbits" type="button">ORB</button>
+        <button class="chip" data-toggle="debug" type="button">DBG</button>
+      </div>
+    </section>
+
+    <!-- left: object navigator -->
+    <nav class="rail" id="rail" aria-label="Celestial bodies"></nav>
+
+    <!-- right: info panel -->
+    <aside class="info glass" id="info-panel" hidden aria-live="polite">
+      <button class="info__close" id="info-close" type="button" aria-label="Close">✕</button>
+      <div class="info__hero">
+        <canvas class="info__portrait" id="info-portrait" width="220" height="220"></canvas>
+        <div>
+          <p class="info__type" id="info-type">STAR</p>
+          <h2 class="info__name" id="info-name">Sol</h2>
+          <p class="info__alt" id="info-alt">the Sun</p>
+        </div>
+      </div>
+      <p class="info__blurb" id="info-blurb"></p>
+      <dl class="info__facts" id="info-facts"></dl>
+      <p class="info__fact" id="info-funfact"></p>
+      <div class="info__orbit">
+        <div class="info__orbit-row"><span>ORBITAL PERIOD</span><b id="info-period">—</b></div>
+        <div class="info__orbit-bar"><i id="info-period-fill"></i></div>
+      </div>
+    </aside>
+
+    <!-- bottom: time bar -->
+    <section class="timebar glass" id="timebar">
+      <div class="timebar__date">
+        <span class="timebar__label">SIMULATED DATE</span>
+        <strong id="sim-date">—</strong>
+        <span class="timebar__rate" id="sim-rate">paused</span>
+      </div>
+      <div class="timebar__track">
+        <button class="tbtn" id="tbtn-slower" type="button" aria-label="Slower">◀◀</button>
+        <div class="ticks" id="time-ticks"></div>
+        <button class="tbtn" id="tbtn-faster" type="button" aria-label="Faster">▶▶</button>
+      </div>
+      <button class="chip chip--wide" id="tbtn-realscale" type="button">REAL SCALE</button>
+    </section>
+
+    <!-- scale ruler (scene 3) -->
+    <section class="ruler glass" id="ruler" hidden>
+      <div class="ruler__row">
+        <span class="ruler__label">FIELD OF VIEW</span>
+        <b id="ruler-value">1 AU</b>
+      </div>
+      <div class="ruler__bar">
+        <i class="ruler__tick" style="left:0%"></i>
+        <i class="ruler__tick" style="left:25%"></i>
+        <i class="ruler__tick" style="left:50%"></i>
+        <i class="ruler__tick" style="left:75%"></i>
+        <i class="ruler__tick" style="left:100%"></i>
+      </div>
+      <div class="ruler__ladder" id="ruler-ladder"></div>
+    </section>
+
+    <!-- hover / cursor tooltip -->
+    <div class="cursor" id="cursor" hidden>
+      <span class="cursor__ring"></span>
+      <span class="cursor__dot"></span>
+    </div>
+    <div class="tooltip glass" id="tooltip" hidden></div>
+
+    <!-- scene switcher -->
+    <nav class="scenes" id="scene-switcher" aria-label="Scenes">
+      <button class="scenes__btn is-active" data-scene="0" type="button"><b>01</b><span>SOLAR</span></button>
+      <button class="scenes__btn" data-scene="1" type="button"><b>02</b><span>GALAXY</span></button>
+      <button class="scenes__btn" data-scene="2" type="button"><b>03</b><span>DEEP</span></button>
+      <button class="scenes__btn" data-scene="3" type="button"><b>04</b><span>SKY</span></button>
+    </nav>
+
+    <div class="hud__hint" id="key-hint">press <kbd>?</kbd> for gestures · <kbd>D</kbd> for debug</div>
+  </div>
+
+  <!-- ============================ CALIBRATION ============================= -->
+  <div id="calibration" class="calib" hidden>
+    <div class="calib__card glass">
+      <p class="calib__step"><span id="calib-index">1</span> / <span id="calib-total">6</span></p>
+      <div class="calib__glyph" id="calib-glyph">🖐</div>
+      <h2 class="calib__title" id="calib-title">Open palm</h2>
+      <p class="calib__hint" id="calib-hint">Hold your open palm towards the camera.</p>
+      <div class="calib__meter"><i id="calib-meter-fill"></i></div>
+      <div class="calib__status" id="calib-status">looking for your hand…</div>
+      <div class="calib__actions">
+        <button class="btn btn--ghost btn--sm" id="btn-calib-skip" type="button">Skip calibration</button>
+        <button class="btn btn--gold btn--sm" id="btn-calib-next" type="button" disabled>Continue</button>
+      </div>
+    </div>
+    <video id="calib-video" class="calib__video" playsinline muted autoplay></video>
+  </div>
+
+  <!-- ============================ CHEAT SHEET ============================= -->
+  <div id="cheatsheet" class="sheet" hidden>
+    <div class="sheet__card glass">
+      <header class="sheet__head">
+        <h2>Gesture map</h2>
+        <button class="iconbtn" id="sheet-close" type="button" aria-label="Close">✕</button>
+      </header>
+      <div class="sheet__grid" id="sheet-grid"></div>
+      <footer class="sheet__foot">
+        <span>Mouse &amp; touch always work as a fallback.</span>
+        <span><kbd>Esc</kbd> close · <kbd>?</kbd> toggle</span>
+      </footer>
+    </div>
+  </div>
+
+  <!-- ============================== DEBUG ================================== -->
+  <div id="debug" class="debug glass" hidden>
+    <header class="debug__head">
+      <span>DIAGNOSTICS</span>
+      <button class="iconbtn" id="debug-close" type="button" aria-label="Close">✕</button>
+    </header>
+    <div class="debug__body" id="debug-body"></div>
+  </div>
+
+  <div id="loader" class="loader">
+    <div class="loader__ring" aria-hidden="true"></div>
+    <p class="loader__label" id="loader-label">initialising renderer</p>
+  </div>
+
+</body>
+</html>
